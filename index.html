@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Advanced Face Detection</title>
+  <style>
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay></video>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const context = canvas.getContext('2d');
+
+    // Request webcam access
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then((stream) => {
+        video.srcObject = stream;
+      })
+      .catch((err) => {
+        console.error("Error accessing webcam:", err);
+      });
+
+    // Adjust canvas size to video size
+    video.addEventListener('play', () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      // Process the video frame by frame
+      setInterval(processVideoFrame, 100);
+    });
+
+    // Basic skin color ranges
+    let minSkinColor = { r: 45, g: 30, b: 20 };
+    let maxSkinColor = { r: 255, g: 200, b: 180 };
+
+    // Sobel kernels for edge detection
+    const sobelX = [
+      [-1, 0, 1],
+      [-2, 0, 2],
+      [-1, 0, 1]
+    ];
+
+    const sobelY = [
+      [-1, -2, -1],
+      [0, 0, 0],
+      [1, 2, 1]
+    ];
+
+    // Function to process each frame from the video
+    function processVideoFrame() {
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+      const blurredData = applyGaussianBlur(imageData);
+
+      // Detect skin regions first
+      detectSkinRegions(blurredData);
+
+      // Apply Sobel Edge Detection after detecting skin regions
+      const sobelData = applySobelFilter(blurredData);
+
+      // Detect regions with face-like features based on edges
+      const detectedRegions = detectFaceRegions(sobelData);
+
+      // Draw detected regions
+      drawDetectedRegions(detectedRegions);
+
+      // Simulate simplified Haar-like features
+      const haarFeatures = detectHaarFeatures(sobelData);
+      drawHaarFeatures(haarFeatures);
+
+      // Adjust skin color range based on detected regions
+      adjustSkinColorRange(detectedRegions, imageData);
+    }
+
+    // Function to apply Gaussian blur to smooth the image
+    function applyGaussianBlur(imageData) {
+      const kernel = [
+        [1, 4, 7, 4, 1],
+        [4, 16, 26, 16, 4],
+        [7, 26, 41, 26, 7],
+        [4, 16, 26, 16, 4],
+        [1, 4, 7, 4, 1]
+      ];
+      const kernelWeight = 273;
+
+      const width = imageData.width;
+      const height = imageData.height;
+      const data = imageData.data;
+      const output = context.createImageData(width, height);
+      const outputData = output.data;
+
+      for (let y = 2; y < height - 2; y++) {
+        for (let x = 2; x < width - 2; x++) {
+          let r = 0, g = 0, b = 0;
+
+          for (let kernelY = -2; kernelY <= 2; kernelY++) {
+            for (let kernelX = -2; kernelX <= 2; kernelX++) {
+              const pixelIndex = ((y + kernelY) * width + (x + kernelX)) * 4;
+              const kernelValue = kernel[kernelY + 2][kernelX + 2];
+
+              r += data[pixelIndex] * kernelValue;
+              g += data[pixelIndex + 1] * kernelValue;
+              b += data[pixelIndex + 2] * kernelValue;
+            }
+          }
+
+          const outputIndex = (y * width + x) * 4;
+          outputData[outputIndex] = r / kernelWeight;
+          outputData[outputIndex + 1] = g / kernelWeight;
+          outputData[outputIndex + 2] = b / kernelWeight;
+          outputData[outputIndex + 3] = 255; // Set alpha to full opacity
+        }
+      }
+
+      return output;
+    }
+
+    // Function to detect skin regions by filtering based on color
+    function detectSkinRegions(imageData) {
+      const data = imageData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+
+        if (!isSkinColor(r, g, b)) {
+          data[i + 3] = 0;  // Set transparency for non-skin pixels
+        }
+      }
+    }
+
+    // Function to check if a pixel is within the skin color range
+    function isSkinColor(r, g, b) {
+      return (
+        r >= minSkinColor.r && r <= maxSkinColor.r &&
+        g >= minSkinColor.g && g <= maxSkinColor.g &&
+        b >= minSkinColor.b && b <= maxSkinColor.b
+      );
+    }
+
+    // Function to apply Sobel Filter for edge detection
+    function applySobelFilter(imageData) {
+      const width = imageData.width;
+      const height = imageData.height;
+      const data = imageData.data;
+      const output = context.createImageData(width, height);
+      const outputData = output.data;
+
+      for (let y = 1; y < height - 1; y++) {
+        for (let x = 1; x < width - 1; x++) {
+          let pixelX = 0;
+          let pixelY = 0;
+
+          // Apply Sobel kernels
+          for (let kernelY = -1; kernelY <= 1; kernelY++) {
+            for (let kernelX = -1; kernelX <= 1; kernelX++) {
+              const pixelIndex = ((y + kernelY) * width + (x + kernelX)) * 4;
+              const gray = (data[pixelIndex] + data[pixelIndex + 1] + data[pixelIndex + 2]) / 3;
+
+              pixelX += gray * sobelX[kernelY + 1][kernelX + 1];
+              pixelY += gray * sobelY[kernelY + 1][kernelX + 1];
+            }
+          }
+
+          const magnitude = Math.sqrt(pixelX ** 2 + pixelY ** 2);
+          const outputIndex = (y * width + x) * 4;
+
+          outputData[outputIndex] = outputData[outputIndex + 1] = outputData[outputIndex + 2] = magnitude > 128 ? 255 : 0;
+          outputData[outputIndex + 3] = 255; // Set alpha to full opacity
+        }
+      }
+
+      return output;
+    }
+
+    // Function to find regions with edge density that may correspond to face-like shapes
+    function detectFaceRegions(edgeImageData) {
+      const width = edgeImageData.width;
+      const height = edgeImageData.height;
+      const data = edgeImageData.data;
+
+      const regionSize = 20; // Size of the region to analyze edge density
+      const threshold = 1000; // Minimum edge count in the region to consider it a face region
+
+      const detectedRegions = [];
+
+      for (let y = 0; y < height; y += regionSize) {
+        for (let x = 0; x < width; x += regionSize) {
+          let edgeCount = 0;
+
+          for (let regionY = 0; regionY < regionSize; regionY++) {
+            for (let regionX = 0; regionX < regionSize; regionX++) {
+              const pixelIndex = ((y + regionY) * width + (x + regionX)) * 4;
+              if (data[pixelIndex] === 255) { // Edge pixel
+                edgeCount++;
+              }
+            }
+          }
+
+          if (edgeCount > threshold) {
+            detectedRegions.push({ x, y, width: regionSize, height: regionSize });
+          }
+        }
+      }
+
+      return detectedRegions;
+    }
+
+    // Function to draw detected face-like regions
+    function drawDetectedRegions(regions) {
+      context.strokeStyle = 'red';
+      context.lineWidth = 2;
+
+      regions.forEach(region => {
+        context.strokeRect(region.x, region.y, region.width, region.height);
+      });
+    }
+
+    // Function to simulate simple Haar-like features by looking for contrasting pixel intensity regions
+    function detectHaarFeatures(edgeImageData) {
+      const width = edgeImageData.width;
+      const height = edgeImageData.height;
+      const data = edgeImageData.data;
+      
+      const featureRegions = [];
+      
+      // Look for rectangular features in the image
+      const blockSize = 10; // Size of the blocks to compare
+      const contrastThreshold = 50; // Minimum contrast difference to detect a feature
+
+      for (let y = 0; y < height - blockSize; y += blockSize) {
+        for (let x = 0; x < width - blockSize; x += blockSize) {
+          let leftSum = 0;
+          let rightSum = 0;
+
+          // Compare left and right halves of a region for contrast
+          for (let blockY = 0; blockY < blockSize; blockY++) {
+            for (let blockX = 0; blockX < blockSize / 2; blockX++) {
+              const leftIndex = ((y + blockY) * width + (x + blockX)) * 4;
+              const rightIndex = ((y + blockY) * width + (x + blockX + blockSize / 2)) * 4;
+
+              leftSum += data[leftIndex];
+              rightSum += data[rightIndex];
+            }
+          }
+
+          const contrastDifference = Math.abs(leftSum - rightSum);
+          if (contrastDifference > contrastThreshold) {
+            featureRegions.push({ x, y, width: blockSize, height: blockSize });
+          }
+        }
+      }
+
+      return featureRegions;
+    }
+
+    // Function to draw detected Haar-like features
+    function drawHaarFeatures(regions) {
+      context.strokeStyle = 'blue';
+      context.lineWidth = 1;
+
+      regions.forEach(region => {
+        context.strokeRect(region.x, region.y, region.width, region.height);
+      });
+    }
+
+    // Function to dynamically adjust skin color range based on detected face regions
+    function adjustSkinColorRange(detectedRegions, imageData) {
+      let totalR = 0, totalG = 0, totalB = 0, count = 0;
+
+      detectedRegions.forEach(region => {
+        for (let y = region.y; y < region.y + region.height; y++) {
+          for (let x = region.x; x < region.x + region.width; x++) {
+            const pixelIndex = (y * imageData.width + x) * 4;
+            totalR += imageData.data[pixelIndex];
+            totalG += imageData.data[pixelIndex + 1];
+            totalB += imageData.data[pixelIndex + 2];
+            count++;
+          }
+        }
+      });
+
+      const avgR = totalR / count;
+      const avgG = totalG / count;
+      const avgB = totalB / count;
+
+      // Set new skin color range based on the average detected color
+      minSkinColor.r = avgR - 30;
+      minSkinColor.g = avgG - 30;
+      minSkinColor.b = avgB - 30;
+
+      maxSkinColor.r = avgR + 30;
+      maxSkinColor.g = avgG + 30;
+      maxSkinColor.b = avgB + 30;
+    }
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
